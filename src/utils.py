@@ -73,8 +73,8 @@ def operations_cards(operations: list):
                     "cashback": 0,
                 }
             card_operations[last_digits]["cashback"] = (
-                card_operations[last_digits]["total_spent"] * 0.01
-            )
+                card_operations[last_digits]["total_spent"] * 0.01)
+
     for digits, data in card_operations.items():
         result.append(
             {
@@ -99,13 +99,28 @@ def top_five_transactions(operations):
 def currency_rates():
     """Возвращает курсы валют"""
     result_usd = requests.get(
-        f"https://api.currencyapi.com/v3/latest?apikey={for_currency}&base_currency=USD&currencies=RUB"
-    )
+        f"https://api.apilayer.com/exchangerates_data/live?base=USD&symbols=USD")
     result_eur = requests.get(
-        f"https://api.currencyapi.com/v3/latest?apikey={for_currency}&base_currency=EUR&currencies=RUB"
-    )
-    value_usd = result_usd.json()["data"]["RUB"]["value"]
-    value_eur = result_eur.json()["data"]["RUB"]["value"]
+        f"https://api.apilayer.com/exchangerates_data/live?base=USD&symbols=EUR")
+
+    # Проверяем, что запрос прошел успешно
+    if result_usd.status_code != 200:
+        print("Ошибка при получении курсов USD:", result_usd.text)
+        return []
+
+    if result_eur.status_code != 200:
+        print("Ошибка при получении курсов EUR:", result_eur.text)
+        return []
+
+    try:
+        value_usd = result_usd.json()["data"]["USD"]["value"]
+        value_eur = result_eur.json()["data"]["EUR"]["value"]
+    except KeyError as e:
+        print(f"Ключ '{e}' не найден в ответе API.")
+        print("Ответ API (USD):", result_usd.json())
+        print("Ответ API (EUR):", result_eur.json())
+        return []
+
     result = [
         {"currency": "USD", "rate": round(value_usd, 2)},
         {"currency": "EUR", "rate": round(value_eur, 2)},
@@ -125,3 +140,15 @@ def stock_prices():
         for data in response.json()["data"]:
             result.append({"stock": data["symbol"], "price": data["close"]})
         return result
+
+if __name__ == "__main__":
+    operations = get_data_from_excel("../data/operations.xlsx")
+    filtered_operations = sort_date_operations(operations, "2023-10-01 00:00:00")
+
+    # Получение курсов валют
+    rates = currency_rates()
+    print("Курсы валют:", rates)
+
+    # Получение цен акций
+    prices = stock_prices()
+    print("Цены акций:", prices)
