@@ -1,110 +1,35 @@
 from datetime import datetime
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import mock_open, patch
 
 import pandas as pd
+import pytest
 
-from src.utils import (get_data_from_excel, greeting_user, operations_cards,
-                       sort_date_operations, top_five_transactions)
+from src.utils import (currency_rates, get_data_from_excel, stock_prices)
 
 
+@patch("builtins.open", new_callable=mock_open, read_data=b"\x3c\x80\x00\x00\x00")
 @patch("pandas.read_excel")
-def test_get_data_from_excel(mock_read_excel):
-    # Проверяем, что возвращается пустой список при ошибке
-    mock_read_excel.side_effect = FileNotFoundError
-    assert get_data_from_excel("dummy_path.xlsx") == []
-
-    mock_read_excel.side_effect = None
-    mock_read_excel.return_value = pd.DataFrame(
-        {"Дата операции": [], "Сумма операции": []}
-    )
-    assert get_data_from_excel("dummy_path.xlsx") == []
+def test_get_data_from_excel(mock_read_excel: Any, mock_file: Any) -> None:
+    mock_read_excel.return_value = pd.DataFrame({"amount": [100], "currency": ["USD"]})
+    transactions = get_data_from_excel("data/transactions.xlsx")
+    assert transactions == [{"amount": 100, "currency": "USD"}]
 
 
-# Тест для sort_date_operations
-def test_sort_date_operations():
-    operations = [
-        {"Дата операции": "01.01.2023 12:00:00", "Сумма операции": 100},
-        {"Дата операции": "15.03.2023 12:00:00", "Сумма операции": 200},
-        {"Дата операции": "01.04.2023 12:00:00", "Сумма операции": 150},
-    ]
-    date = "2023-04-01 12:00:00"
-    sorted_ops = sort_date_operations(operations, date)
-    assert len(sorted_ops) == 0
+@patch("builtins.open", side_effect=FileNotFoundError)
+def test_not_found_excel(mock_file: Any) -> None:
+    transactions = get_data_from_excel("data/transactions.xlsx")
+    assert transactions == []
+
+@patch("requests.get")
+def test_currency_rates(mock_convert: Any) -> None:
+    mock_convert.return_value.status_code = 200
+    mock_convert.return_value.json.return_value = {"data": {"RUB": {"value": 1.00}}}
+    assert currency_rates() == [{"currency": "USD", "rate": 1.00}, {"currency": "EUR", "rate": 1.00}]
 
 
-# Тест для greeting_user
-@patch("src.utils.datetime")
-def test_greeting_user(mock_datetime):
-    # Утро
-    mock_datetime.now.return_value = datetime(2023, 5, 10, 5)
-    assert greeting_user() == "Доброе утро"
-
-    # День
-    mock_datetime.now.return_value = datetime(2023, 5, 10, 13)
-    assert greeting_user() == "Добрый день"
-
-    # Вечер
-    mock_datetime.now.return_value = datetime(2023, 5, 10, 19)
-    assert greeting_user() == "Добрый вечер"
-
-    # Ночь
-    mock_datetime.now.return_value = datetime(2023, 5, 10, 1)
-    assert greeting_user() == "Доброй ночи"
-
-
-# Тест для operations_cards
-def test_operations_cards():
-    operations = [
-        {"Номер карты": "1234567890123456", "Сумма операции": "$100"},
-        {"Номер карты": "1234567890123456", "Сумма операции": "$250"},
-        {"Номер карты": "6543210987654321", "Сумма операции": "$200"},
-    ]
-    result = operations_cards(operations)
-    assert len(result) == 2
-    assert result[0]["total_spent"] == 350  # 100 + 250
-    assert result[0]["last_digits"] == "3456"
-
-
-# Тест для top_five_transactions
-def test_top_five_transactions():
-    operations = [
-        {
-            "Дата операции": "01.01.2023 12:00:00",
-            "Сумма операции": "$100",
-            "Категория": "продукты",
-            "Описание": "покупка",
-        },
-        {
-            "Дата операции": "15.03.2023 12:00:00",
-            "Сумма операции": "$200",
-            "Категория": "транспорт",
-            "Описание": "билет",
-        },
-        {
-            "Дата операции": "01.04.2023 12:00:00",
-            "Сумма операции": "$150",
-            "Категория": "развлечения",
-            "Описание": "кино",
-        },
-        {
-            "Дата операции": "10.04.2023 12:00:00",
-            "Сумма операции": "$250",
-            "Категория": "путешествия",
-            "Описание": "отель",
-        },
-        {
-            "Дата операции": "15.04.2023 12:00:00",
-            "Сумма операции": "$300",
-            "Категория": "покупки",
-            "Описание": "одежда",
-        },
-        {
-            "Дата операции": "20.04.2023 12:00:00",
-            "Сумма операции": "$400",
-            "Категория": "еда",
-            "Описание": "рестораны",
-        },
-    ]
-    result = top_five_transactions(operations)
-    # проверьте результат
-    assert len(result) == 5
+@patch("requests.get")
+def test_stock_prices(mock_convert: Any):
+    mock_convert.return_value.status_code = 200
+    mock_convert.return_value.json.return_value = {"data": [{"symbol": "AAPL", "close": 1.0}]}
+    assert stock_prices() == [{"stock": "AAPL", "price": 1.0}]

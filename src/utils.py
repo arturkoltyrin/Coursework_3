@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime
 
@@ -6,149 +7,129 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+file_json = os.path.join(project_root, "user_settings.json")
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+rel_file_path = os.path.join(current_dir, "../logs/utils.log")
+abs_file_path = os.path.abspath(rel_file_path)
+
+logger = logging.getLogger("utils")
+logger.setLevel(logging.DEBUG)
+file_handler = logging.FileHandler(abs_file_path, "w", encoding="utf-8")
+file_formatter = logging.Formatter("%(asctime)s - %(funcName)s %(levelname)s: %(message)s")
+file_handler.setFormatter(file_formatter)
+logger.addHandler(file_handler)
+
 load_dotenv()
 for_currency = os.getenv("API_KEY_FOR_CURRENCY")
-for_stoks = os.getenv("API_KEY_FOR_STOCK")
+for_share = os.getenv("API_KEY_FOR_STOCK")
 
 
-def get_data_from_excel(path_to_the_file: str) -> list:
+def get_data_from_excel(path_to_the_file: str) -> pd.DataFrame | list:
     """Функция, которая возвращает данные о финансовых транзакциях из файла excel"""
     try:
         pd.read_excel(path_to_the_file)
-    except ValueError:
+
+    except ValueError as ex:
+        logger.error(f"Произошла ошибка {ex}")
+
         return []
 
-    except FileNotFoundError:
+    except FileNotFoundError as ex:
+        logger.error(f"Произошла ошибка {ex}")
+
         return []
+
     else:
         operations = pd.read_excel(path_to_the_file)
+        logger.info("Успешное выполнение")
         return operations.to_dict(orient="records")
 
 
-def sort_date_operations(operations: list, date: str) -> list:
-    sorted_operations = []
-    data_datetime = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
-
-    # Определяем первый и последний день месяца
-    first_day_month = data_datetime.replace(day=1)
-    last_day_month = (first_day_month + pd.offsets.MonthEnd()).replace(day=1)
-
-    for operation in operations:
-        date_operation = datetime.strptime(
-            operation["Дата операции"], "%d.%m.%Y %H:%M:%S"
-        )
-        if first_day_month <= date_operation < last_day_month:
-            sorted_operations.append(operation)
-
-    return sorted_operations
+def filter_date_operations(operations: pd.DataFrame, date: str) -> list:
+    """Возвращает операции за текущий месяц"""
+    first_day_moth = datetime.strptime(date, "%Y-%m-%d %H:%M:%S").replace(day=1, hour=00, minute=00, second=00)
+    operations["Дата операции"] = pd.to_datetime(operations["Дата операции"], format="%d.%m.%Y %H:%M:%S")
+    return operations[
+        (operations["Дата операции"] >= first_day_moth)
+        & (operations["Дата операции"] <= datetime.strptime(date, "%Y-%m-%d %H:%M:%S"))
+    ]
 
 
-def greeting_user():
-    hour = datetime.now().hour
-    if 5 <= hour < 12:
-        return "Доброе утро"
-    elif 12 <= hour < 18:
-        return "Добрый день"
-    elif 18 <= hour < 23:
-        return "Добрый вечер"
-    else:
+def greeting_user() -> str:
+    """Возвращает приветствие в зависимости от времени суток"""
+    logger.info("Приветствуем пользователя")
+    current_hour = datetime.now().hour
+    if current_hour < 6:
         return "Доброй ночи"
+    elif current_hour < 12:
+        return "Доброе утро"
+    elif current_hour < 18:
+        return "Добрый день"
+    else:
+        return "Добрый вечер"
 
 
-def operations_cards(operations: list):
+def operations_cards(operations: pd.DataFrame) -> list:
     """Возвращает данные по каждой карте"""
-    card_operations = {}
-    result = []
-    for operation in operations:
-        card_number = str(operation.get("Номер карты"))
-        str_amount = str(operation.get("Сумма операции"))
-        amount = str_amount[1:]
-        if card_number != "nan":
-            last_digits = card_number[-4:]
-            if last_digits in card_operations:
-                card_operations[last_digits]["total_spent"] += float(amount)
-            else:
-                card_operations[last_digits] = {
-                    "total_spent": float(amount),
-                    "cashback": 0,
-                }
-            card_operations[last_digits]["cashback"] = (
-                card_operations[last_digits]["total_spent"] * 0.01)
+    grouped_operations = operations.groupby("Номер карты")["Сумма операции с округлением"].sum().reset_index()
+    grouped_operations["Cashback"] = (grouped_operations["Сумма операции с округлением"] // 100).astype(int)
+    grouped_operations["LastFourDigits"] = grouped_operations["Номер карты"].astype(str).str[-4:]
+    result = grouped_operations[["LastFourDigits", "Сумма операции с округлением", "Cashback"]]
+    result.columns = ["last_digits", "total_spent", "cashback"]
 
-    for digits, data in card_operations.items():
+    return result.to_dict(orient="records")
+
+
+def top_five_transactions(operations: pd.DataFrame) -> list:
+    """Возвращает топ-5 транзакций по сумме платежа"""
+    result = []
+    top_transactions = operations.nlargest(5, "Сумма операции с округлением")
+    for transaction in top_transactions.to_dict(orient="records"):
         result.append(
             {
-                "last_digits": digits,
-                "total_spent": round(data["total_spent"], 2),
-                "cashback": data["cashback"],
+                "date": transaction["Дата операции"],
+                "amount": transaction["Сумма операции с округлением"],
+                "category": transaction["Категория"],
+                "description": transaction["Описание"],
             }
         )
     return result
 
 
-def top_five_transactions(operations):
-    sorted_operations = sorted(
-        operations,
-        key=lambda x: float(x["Сумма операции"].replace("$", "").replace(",", "")),
-        reverse=True,
-    )
-
-    return sorted_operations[:5]
-
-
-def currency_rates():
+def currency_rates() -> list:
     """Возвращает курсы валют"""
-    result_usd = requests.get(
-        f"https://api.apilayer.com/exchangerates_data/live?base=USD&symbols=USD")
-    result_eur = requests.get(
-        f"https://api.apilayer.com/exchangerates_data/live?base=USD&symbols=EUR")
-
-    # Проверяем, что запрос прошел успешно
-    if result_usd.status_code != 200:
-        print("Ошибка при получении курсов USD:", result_usd.text)
-        return []
-
-    if result_eur.status_code != 200:
-        print("Ошибка при получении курсов EUR:", result_eur.text)
-        return []
-
-    try:
-        value_usd = result_usd.json()["data"]["USD"]["value"]
-        value_eur = result_eur.json()["data"]["EUR"]["value"]
-    except KeyError as e:
-        print(f"Ключ '{e}' не найден в ответе API.")
-        print("Ответ API (USD):", result_usd.json())
-        print("Ответ API (EUR):", result_eur.json())
-        return []
-
-    result = [
-        {"currency": "USD", "rate": round(value_usd, 2)},
-        {"currency": "EUR", "rate": round(value_eur, 2)},
-    ]
-    return result
+    logger.info("Поиска курс валют")
+    with open(file_json, encoding="utf-8") as file:
+        user_currencies = json.load(file)
+    result_currencies = []
+    for currency in user_currencies["user_currencies"]:
+        response = requests.get(
+            f"https://api.currencyapi.com/v3/latest?apikey={for_currency}&base_currency={currency}&currencies=RUB"
+        )
+        result_currencies.append({"currency": currency, "rate": round(response.json()["data"]["RUB"]["value"], 2)})
+    return result_currencies
 
 
-def stock_prices():
+def stock_prices() -> list:
     """Возвращает стоимость акций из S&P 500"""
-    url = f"https://api.marketstack.com/v1/eod/latest?access_key={for_stoks}"
+    logger.info("Поиск основных акций из S&P500")
+    url = f"https://api.marketstack.com/v1/eod/latest?access_key={for_share}"
     result = []
-    with open("../user_settings.json", encoding="utf-8") as file:
-        user_stoks = json.load(file)
-        user_stok = ",".join(user_stoks["user_stocks"])
-        querystring = {"symbols": user_stok}
+    with open(file_json, encoding="utf-8") as file:
+        user_shares = json.load(file)
+        user_share = ",".join(user_shares["user_stocks"])
+        querystring = {"symbols": user_share}
         response = requests.get(url, params=querystring)
         for data in response.json()["data"]:
             result.append({"stock": data["symbol"], "price": data["close"]})
         return result
 
-if __name__ == "__main__":
-    operations = get_data_from_excel("../data/operations.xlsx")
-    filtered_operations = sort_date_operations(operations, "2023-10-01 00:00:00")
 
-    # Получение курсов валют
-    rates = currency_rates()
-    print("Курсы валют:", rates)
-
-    # Получение цен акций
-    prices = stock_prices()
-    print("Цены акций:", prices)
+def convert_timestamps_to_strings(dataframe):
+    """Преобразует все столбцы с типом 'datetime64[ns]' в строки."""
+    for col in dataframe.select_dtypes(include=["datetime64[ns]"]).columns:
+        dataframe[col] = dataframe[col].dt.strftime("%Y-%m-%d %H:%M:%S")
+    return dataframe
